@@ -15,6 +15,10 @@ methodmap AudioPlayer < Handle
         public native get();
     }
 
+    property int ClientIndex {
+        public native get();
+    }
+
     public native void SetFrom(float ss);
 
     public native void AddArg(const char[] arg);

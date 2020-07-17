@@ -292,6 +292,7 @@ impl Extension {
 pub struct AudioPlayerHandle {
     pub(crate) ffmpeg: Option<FFmpeg>,
     pub(crate) player: Option<Player>,
+    slot: Option<usize>,
 }
 
 impl AudioPlayerHandle {
@@ -299,6 +300,7 @@ impl AudioPlayerHandle {
         AudioPlayerHandle {
             ffmpeg: Some(FFmpeg::new()),
             player: None,
+            slot: None,
         }
     }
 
@@ -318,6 +320,10 @@ impl AudioPlayerHandle {
         }
     }
 
+    fn slot(&self) -> Option<usize> {
+        self.slot.clone()
+    }
+
     fn play(&mut self, slot: usize, uri: &str) -> bool {
         if let Some(ffmpeg) = self.ffmpeg.take() {
             match ffmpeg.start(uri) {
@@ -325,6 +331,7 @@ impl AudioPlayerHandle {
                     let mixer = unsafe { EXT.as_ref().unwrap().mixers.get(slot) };
                     match mixer {
                         Some(mixer) => {
+                            self.slot.replace(slot);
                             async_std::task::block_on(async {
                                 self.player.replace(
                                     mixer
@@ -622,6 +629,31 @@ cpp! {{
         return finished ? 1 : 0;
     }
 
+    static cell_t Native_AudioPlayer_GetClientIndex(IPluginContext *pContext, const cell_t *params)
+    {
+        Handle_t hndl = static_cast<Handle_t>(params[1]);
+        HandleError err;
+        HandleSecurity sec = HandleSecurity(NULL, myself->GetIdentity());
+
+        void *player;
+        if ((err = handlesys->ReadHandle(hndl, g_AudioPlayerType, &sec, &player)) != HandleError_None) {
+            return pContext->ThrowNativeError("Invalid AudioPlayer handle %x (error %d)", hndl, err);
+        }
+
+        int client = rust!(Native_AudioPlayer_GetClientIndex__Rust [player : *mut AudioPlayerHandle as "void*"] -> c_int as "int" {
+            let player = Box::from_raw(player);
+            let client = match player.slot() {
+                Some(slot) => slot + 1,
+                None => 0,
+            };
+            let client = client as c_int;
+
+            std::mem::forget(player);
+            client
+        });
+        return client;
+    }
+
     static cell_t Native_AudioPlayer_SetFrom(IPluginContext *pContext, const cell_t *params)
     {
         Handle_t hndl = static_cast<Handle_t>(params[1]);
@@ -712,6 +744,7 @@ cpp! {{
         { "AudioPlayer.AudioPlayer", Native_CreateAudioPlayer },
         { "AudioPlayer.PlayedSecs.get", Native_AudioPlayer_GetPlayedSecs },
         { "AudioPlayer.IsFinished.get", Native_AudioPlayer_GetFinished },
+        { "AudioPlayer.ClientIndex.get", Native_AudioPlayer_GetClientIndex },
         { "AudioPlayer.SetFrom", Native_AudioPlayer_SetFrom },
         { "AudioPlayer.AddArg", Native_AudioPlayer_AddArg },
         { "AudioPlayer.PlayAsClient", Native_AudioPlayer_PlayAsClient },
