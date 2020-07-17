@@ -1,0 +1,29 @@
+[package]
+name = "wepoll-sys-stjepang"
+version = "1.0.6"
+authors = [
+  "Yorick Peterse <yorickpeterse@gmail.com>",
+  "Stjepan Glavina <stjepang@gmail.com>",
+]
+edition = "2018"
+links = "wepoll"
+build = "build.rs"
+description = "A fork of wepoll-sys with stjepang's patches"
+repository = "https://github.com/stjepang/wepoll-sys-stjepang"
+homepage = "https://github.com/stjepang/wepoll-sys-stjepang"
+documentation = "https://docs.rs/wepoll-sys-stjepang"
+readme = "README.md"
+license = "MPL-2.0"
+keywords = ["wepoll", "poll", "windows", "epoll"]
+categories = ["external-ffi-bindings", "os::windows-apis"]
+
+[build-dependencies]
+bindgen = { version = "^0.53", optional = true }
+cc = "^1.0"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+
+[features]
+default = []
+buildtime-bindgen = ["bindgen"]
