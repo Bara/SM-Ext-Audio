@@ -289,9 +289,12 @@ impl Mixer {
                 last_pull = now;
 
                 let factor = diff.as_secs_f64() / delay.as_secs_f64();
-                let mut poll_size = std::cmp::max(
-                    crate::FRAMESIZE * 2,
-                    (crate::FRAMESIZE as f64 * 2.0 * factor) as usize,
+                let mut poll_size = std::cmp::min(
+                    std::cmp::max(
+                        crate::FRAMESIZE * 2,
+                        (crate::FRAMESIZE as f64 * 2.0 * factor) as usize,
+                    ),
+                    crate::FRAMESIZE * 2 * 2,
                 );
                 if poll_size % 2 == 1 {
                     poll_size += 1;
