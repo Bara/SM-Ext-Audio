@@ -3,22 +3,14 @@
 #[macro_use]
 extern crate cpp;
 
-use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_int, c_uchar};
 
-use std::collections::VecDeque;
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
-
 use async_std::task::JoinHandle;
 use futures::channel::oneshot;
-use futures::io::WriteHalf;
-use futures::io::{AsyncRead, AsyncWrite};
-use futures::io::{AsyncReadExt, AsyncWriteExt};
 
 const CODEC_NAME: &str = "bin/vaudio_celt";
 const CODEC_INTERFACE_NAME: &str = "vaudio_celt";
@@ -121,126 +113,44 @@ cpp! {{
 mod codec;
 mod player;
 
+use codec::VoiceCodec;
 use player::{BufferBlockingRead, FFmpeg, Mixer, Player};
 
-type ArcMixer = Arc<Mixer>;
-
-pub(crate) struct BytesPipe {
-    buf: VecDeque<u8>,
-    waker: Option<Waker>,
-}
-
-impl BytesPipe {
-    fn new() -> BytesPipe {
-        BytesPipe {
-            buf: VecDeque::new(),
-            waker: None,
-        }
-    }
-}
-
-impl AsyncRead for BytesPipe {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        let mut i = 0;
-        for b in buf.iter_mut() {
-            *b = match self.buf.pop_front() {
-                Some(b) => b,
-                None => break,
-            };
-            i += 1;
-        }
-        if i == 0 {
-            self.waker.replace(cx.waker().clone());
-            Poll::Pending
-        } else {
-            Poll::Ready(Ok(i))
-        }
-    }
-}
-
-impl AsyncWrite for BytesPipe {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let mut i = 0;
-        for b in buf.iter() {
-            self.buf.push_back(*b);
-            i += 1;
-        }
-        Poll::Ready(Ok(i))
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
-        if let Some(waker) = self.waker.take() {
-            waker.wake();
-        }
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
-        if let Some(waker) = self.waker.take() {
-            waker.wake();
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-type AudioWriteHalf = Mutex<WriteHalf<BytesPipe>>;
-
 pub(crate) struct Extension {
-    mixers: Arc<Vec<(ArcMixer, AudioWriteHalf, Player)>>,
-
-    spawned_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    mixers: Vec<(Mixer, Mutex<VoiceCodec>)>,
+    spawned_tasks: Mutex<Vec<JoinHandle<()>>>,
     drop_tx: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Extension {
-    fn new() -> Extension {
+    fn init() {
         let mut mixers = Vec::new();
         for slot in 0..MAXSLOT + 1 {
-            let (reader, writer) = BytesPipe::new().split();
-            let mixer = Arc::new(Mixer::new(slot as c_int));
-
-            let player = async_std::task::block_on(async { mixer.push(Box::pin(reader)).await });
-            mixers.push((mixer, Mutex::new(writer), player));
+            let mut decode = VoiceCodec::new();
+            decode.init(CODEC_QUALITY);
+            mixers.push((Mixer::new(slot as c_int), Mutex::new(decode)));
         }
 
-        Extension {
-            mixers: Arc::new(mixers),
-            spawned_tasks: Arc::new(Mutex::new(Vec::new())),
-            drop_tx: None,
-            thread: None,
+        unsafe {
+            EXT.replace(Extension {
+                mixers,
+                spawned_tasks: Mutex::new(Vec::new()),
+                drop_tx: None,
+                thread: None,
+            });
         }
     }
 
-    /*
-    pub(crate) fn report_msg(msg: &str) {
-        let msg = CString::new(msg).unwrap();
-        let cmsg = msg.as_ptr();
-        cpp!(unsafe [cmsg as "const char*"] {
-            smutils->LogMessage(myself, "%s", cmsg);
-        });
-    }
-    */
-
-    pub(crate) fn run(&mut self) {
+    fn run() {
         let (drop_tx, drop_rx) = oneshot::channel();
-
-        let spawned_tasks = self.spawned_tasks.clone();
-        let mixers = self.mixers.clone();
 
         let thread = thread::spawn(move || {
             async_std::task::block_on(async move {
+                let ext = unsafe { EXT.as_ref().unwrap() };
                 {
-                    let mut spawned_tasks = spawned_tasks.lock().unwrap();
-                    for entry in mixers.iter() {
+                    let mut spawned_tasks = ext.spawned_tasks.lock().unwrap();
+                    for entry in ext.mixers.iter() {
                         let mixer = entry.0.clone();
                         spawned_tasks.push(
                             async_std::task::Builder::new()
@@ -256,28 +166,37 @@ impl Extension {
                 drop_rx.await.unwrap();
 
                 {
-                    let mut spawned_tasks = spawned_tasks.lock().unwrap();
-                    for entry in mixers.iter() {
-                        entry.0.shutdown().await;
+                    for entry in ext.mixers.iter() {
+                        entry.0.shutdown();
                     }
+
+                    let mut spawned_tasks = ext.spawned_tasks.lock().unwrap();
                     while let Some(task) = spawned_tasks.pop() {
                         task.await;
                     }
                 }
             })
         });
-        self.drop_tx.replace(drop_tx);
-        self.thread.replace(thread);
+
+        let ext = unsafe { EXT.as_mut().unwrap() };
+        ext.drop_tx.replace(drop_tx);
+        ext.thread.replace(thread);
     }
 
-    pub(crate) fn shutdown(&mut self) {
-        if let Some(drop_tx) = self.drop_tx.take() {
-            drop_tx.send(()).unwrap()
-        };
+    pub(crate) fn shutdown() {
+        {
+            let ext = unsafe { EXT.as_mut().unwrap() };
+            if let Some(drop_tx) = ext.drop_tx.take() {
+                drop_tx.send(()).unwrap()
+            };
 
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap()
-        };
+            if let Some(thread) = ext.thread.take() {
+                thread.join().unwrap()
+            };
+        }
+        unsafe {
+            drop(EXT.take());
+        }
     }
 
     pub(crate) fn report_error(msg: &str) {
@@ -287,6 +206,16 @@ impl Extension {
             smutils->LogError(myself, "%s", cmsg);
         });
     }
+
+    /*
+    pub(crate) fn report_msg(msg: &str) {
+        let msg = CString::new(msg).unwrap();
+        let cmsg = msg.as_ptr();
+        cpp!(unsafe [cmsg as "const char*"] {
+            smutils->LogMessage(myself, "%s", cmsg);
+        });
+    }
+    */
 }
 
 pub struct AudioPlayerHandle {
@@ -321,26 +250,22 @@ impl AudioPlayerHandle {
     }
 
     fn slot(&self) -> Option<usize> {
-        self.slot.clone()
+        self.slot
     }
 
     fn play(&mut self, slot: usize, uri: &str) -> bool {
         if let Some(ffmpeg) = self.ffmpeg.take() {
             match ffmpeg.start(uri) {
                 Ok(child) => {
-                    let mixer = unsafe { EXT.as_ref().unwrap().mixers.get(slot) };
-                    match mixer {
-                        Some(mixer) => {
+                    let ext = unsafe { EXT.as_ref().unwrap() };
+                    let entry = ext.mixers.get(slot);
+                    match entry {
+                        Some(entry) => {
                             self.slot.replace(slot);
                             async_std::task::block_on(async {
-                                self.player.replace(
-                                    mixer
-                                        .0
-                                        .push(Box::pin(BufferBlockingRead::new(
-                                            child.stdout.unwrap(),
-                                        )))
-                                        .await,
-                                );
+                                self.player.replace(entry.0.push(Box::pin(
+                                    BufferBlockingRead::new(child.stdout.unwrap()),
+                                )));
                             });
                             return true;
                         }
@@ -403,19 +328,19 @@ cpp! {{
 
         rust!(SV_BroadcastVoiceData_Callback__Internal [slot : usize as "size_t", data : *const c_uchar as "const char*", data_size : usize as "size_t"] {
             let comp = unsafe { std::slice::from_raw_parts(data, data_size) };
-            let mixers = unsafe { EXT.as_ref().unwrap().mixers.clone() };
-            if slot >= mixers.len() {
+            let ext = unsafe { EXT.as_ref().unwrap() };
+            if slot >= ext.mixers.len() {
                 return;
             }
 
             async_std::task::block_on(async move {
                 let mut decomp = vec![0; 22050];
-                let entry = mixers.get(slot).unwrap();
+                let entry = ext.mixers.get(slot).unwrap();
                 let size = {
-                    let mut decode = entry.0.decode.lock().await;
+                    let mut decode = entry.1.lock().unwrap();
                     decode.decompress(comp, &mut decomp) * 2
                 };
-                let _ = entry.1.lock().unwrap().write(&decomp[..size]).await;
+                entry.0.write(&decomp[..size]);
             });
         });
         //SV_BroadcastVoiceData(iclient, msg, drop);
@@ -486,12 +411,9 @@ cpp! {{
                     *codecStore = Box::into_raw(lib);
                 }
 
-                // allocate global voice codec
-                unsafe {
-                    let mut ext = Extension::new();
-                    ext.run();
-                    EXT.replace(ext);
-                }
+                // initialize extension
+                Extension::init();
+                Extension::run();
 
                 true
             });
@@ -546,9 +468,7 @@ cpp! {{
 
             rust!(Ext__SDK_OnUnload [g_pCodecLib : *mut libloading::Library as "void*"] {
                 unsafe {
-                    let mut ext = EXT.take().unwrap();
-                    ext.shutdown();
-                    drop(ext);
+                    Extension::shutdown();
                     drop(Box::from_raw(g_pCodecLib));
                 }
             });
@@ -723,8 +643,8 @@ cpp! {{
         pContext->LocalToString(params[3], &uri);
 
         bool success = rust!(Native_AudioPlayer_PlayAsClient__Rust [player : *mut AudioPlayerHandle as "void*", uri : *const i8 as "char*", slot : c_int as "int"] -> bool as "bool" {
-            let mixers = unsafe { EXT.as_ref().unwrap().mixers.clone() };
-            if slot < 0 || slot >= mixers.len() as i32 {
+            let ext = unsafe { EXT.as_ref().unwrap() };
+            if slot < 0 || slot >= ext.mixers.len() as i32 {
                 Extension::report_error(&format!("Slot out of range: {}", slot));
                 return false;
             }
