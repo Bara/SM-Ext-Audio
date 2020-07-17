@@ -46,7 +46,7 @@ impl<T: io::Read + Send + 'static> AsyncRead for BufferBlockingRead<T> {
         cx: &mut Context,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        if self.buf_fin && self.buf.len() <= 0 {
+        if self.buf_fin && self.buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
 
@@ -80,7 +80,7 @@ impl<T: io::Read + Send + 'static> AsyncRead for BufferBlockingRead<T> {
 
                     let res = res.unwrap();
                     if let Ok(buf) = res {
-                        if buf.len() == 0 {
+                        if buf.is_empty() {
                             self.buf_fin = true;
                         }
                         for b in buf.iter() {
@@ -105,8 +105,8 @@ impl<T: io::Read + Send + 'static> AsyncRead for BufferBlockingRead<T> {
         }
 
         // Timer
-        for m in 0..size {
-            buf[m] = self.buf.pop_front().unwrap();
+        for b in buf.iter_mut() {
+            *b = self.buf.pop_front().unwrap();
         }
         Poll::Ready(Ok(size))
     }
@@ -285,7 +285,7 @@ impl Mixer {
 
             let now = Instant::now();
             let diff = now.duration_since(last_pull);
-            if let Some(_) = diff.checked_sub(delay) {
+            if diff.checked_sub(delay).is_some() {
                 last_pull = now;
 
                 let factor = diff.as_secs_f64() / delay.as_secs_f64();
