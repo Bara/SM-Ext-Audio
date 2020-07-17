@@ -3,6 +3,10 @@
 #endif
 #define _audio_included
 
+native bool AudioMixer_GetClientCanHearSelf(int client);
+
+native void AudioMixer_SetClientCanHearSelf(int client, bool hearself);
+
 methodmap AudioPlayer < Handle
 {
     public native AudioPlayer();

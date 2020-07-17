@@ -15,7 +15,10 @@ mod metamod {
     use std::os::raw::{c_int, c_uchar};
 
     #[no_mangle]
-    pub unsafe extern "C" fn PL_EXPOSURE(name: *const c_uchar, code: *mut c_int) -> *mut c_void {
+    pub unsafe extern "C" fn CreateInterface(
+        name: *const c_uchar,
+        code: *mut c_int,
+    ) -> *mut c_void {
         cpp!([name as "const char*", code as "int*"] -> *mut c_void as "void *" {
             #if defined SMEXT_CONF_METAMOD
                 #if defined METAMOD_PLAPI_VERSION

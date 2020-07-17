@@ -3,7 +3,7 @@
 #[macro_use]
 extern crate cpp;
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 
 use std::ffi::{CStr, CString};
@@ -55,10 +55,11 @@ fn get_sm_path<'a>() -> &'a CStr {
     }
 }
 
-fn send_voicedata_as_slot(slot: c_int, data: &[u8]) {
+fn send_voicedata_as_slot(slot: c_int, data: &[u8], hearself: bool) {
+    let _guard = Extension::send_guard();
     let size = data.len();
     let data = data.as_ptr();
-    cpp!(unsafe [slot as "int", data as "const char *", size as "size_t"] {
+    cpp!(unsafe [slot as "int", data as "const char *", size as "size_t", hearself as "bool"] {
         IClient* iclient = iserver->GetClient(slot);
         if (iclient == nullptr) {
             return;
@@ -66,7 +67,11 @@ fn send_voicedata_as_slot(slot: c_int, data: &[u8]) {
 
         CCLCMsg_VoiceData msg;
         msg.set_data(data, size);
-        SV_BroadcastVoiceData(iclient, &msg, false);
+        if (hearself) {
+            SV_BroadcastVoiceData_AllowHearSelf(iclient, &msg, false);
+        } else {
+            SV_BroadcastVoiceData(iclient, &msg, false);
+        }
     });
 }
 
@@ -121,6 +126,7 @@ pub(crate) struct Extension {
     spawned_tasks: Mutex<Vec<JoinHandle<()>>>,
     drop_tx: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
+    send_lock: Mutex<()>,
 }
 
 impl Extension {
@@ -138,6 +144,7 @@ impl Extension {
                 spawned_tasks: Mutex::new(Vec::new()),
                 drop_tx: None,
                 thread: None,
+                send_lock: Mutex::new(()),
             });
         }
     }
@@ -181,6 +188,11 @@ impl Extension {
         let ext = unsafe { EXT.as_mut().unwrap() };
         ext.drop_tx.replace(drop_tx);
         ext.thread.replace(thread);
+    }
+
+    fn send_guard() -> MutexGuard<'static, ()> {
+        let ext = unsafe { EXT.as_ref().unwrap() };
+        ext.send_lock.lock().unwrap()
     }
 
     pub(crate) fn shutdown() {
@@ -289,6 +301,8 @@ cpp! {{
     ISDKTools *sdktools = nullptr;
     IServer *iserver = nullptr;
 
+    SH_DECL_MANUALHOOK1(CGameClient__IsHearingClient, 0, 0, 0, bool, int);
+
     #if defined(WIN32)
     void (__cdecl *SV_BroadcastVoiceData_Actual)(bool) = nullptr;
     #else
@@ -306,6 +320,21 @@ cpp! {{
     #else
         SV_BroadcastVoiceData_Actual(iclient, msg, drop);
     #endif
+    }
+
+    bool Hook_IsHearingClient(int slot) {
+        IClient *iclient = META_IFACEPTR(IClient);
+        if (slot == iclient->GetPlayerSlot()) {
+            RETURN_META_VALUE(MRES_SUPERCEDE, true);
+        }
+        RETURN_META_VALUE(MRES_IGNORED, false);
+    }
+
+    static void SV_BroadcastVoiceData_AllowHearSelf(IClient *iclient, const CCLCMsg_VoiceData *msg, bool drop)
+    {
+        SH_ADD_MANUALHOOK(CGameClient__IsHearingClient, iclient, SH_STATIC(Hook_IsHearingClient), false);
+        SV_BroadcastVoiceData(iclient, msg, drop);
+        SH_REMOVE_MANUALHOOK(CGameClient__IsHearingClient, iclient, SH_STATIC(Hook_IsHearingClient), false);
     }
 
     #if defined(WIN32)
@@ -365,11 +394,9 @@ cpp! {{
 
     IGameConfig *g_pGameConf = nullptr;
     CDetour *g_pDetourSVBroadcastVoiceData = nullptr;
+    int g_iIsHearingClientOffset = 0;
 
     extern sp_nativeinfo_t g_Natives[];
-
-    static void OnGameFrame(bool simulating) {
-    }
 
     class Ext : public SDKExtension
     {
@@ -430,6 +457,13 @@ cpp! {{
                 return false;
             }
 
+            if (!g_pGameConf->GetOffset("CGameClient::IsHearingClient", &g_iIsHearingClientOffset)) {
+                smutils->Format(error, maxlen, "Offset of CGameClient::IsHearingClient not found");
+                SDK_OnUnload();
+                return false;
+            }
+            SH_MANUALHOOK_RECONFIGURE(CGameClient__IsHearingClient, g_iIsHearingClientOffset, 0, 0);
+
             CDetourManager::Init(smutils->GetScriptingEngine(), g_pGameConf);
             g_pDetourSVBroadcastVoiceData = CDetourManager::CreateDetour((void*)&SV_BroadcastVoiceData_Callback, (void**)&SV_BroadcastVoiceData_Actual, "SV_BroadcastVoiceData");
             if (g_pDetourSVBroadcastVoiceData == nullptr) {
@@ -442,14 +476,10 @@ cpp! {{
             g_AudioPlayerType = handlesys->CreateType("AudioPlayer", &g_AudioPlayerTypeHandler, 0, NULL, NULL, myself->GetIdentity(), NULL);
             sharesys->AddNatives(myself, g_Natives);
 
-            smutils->AddGameFrameHook(&OnGameFrame);
-
             return true;
         }
 
         virtual void SDK_OnUnload() {
-            smutils->RemoveGameFrameHook(&OnGameFrame);
-
             if (g_pDetourSVBroadcastVoiceData) {
                 g_pDetourSVBroadcastVoiceData->Destroy();
                 g_pDetourSVBroadcastVoiceData = nullptr;
@@ -490,6 +520,35 @@ cpp! {{
 
     Ext g_Ext;
     SMEXT_LINK(&g_Ext);
+
+    static cell_t Native_AudioMixer_GetClientCanHearSelf(IPluginContext *pContext, const cell_t *params)
+    {
+        int client = params[1];
+
+        bool hearself = rust!(Native_AudioMixer_GetClientCanHearSelf__Rust [client : c_int as "int"] -> bool as "bool" {
+            let ext = unsafe { EXT.as_ref().unwrap() };
+            if let Some(mixer) = ext.mixers.get(client as usize-1) {
+                mixer.0.hearself()
+            } else {
+                false
+            }
+        });
+        return hearself ? 1 : 0;
+    }
+
+    static cell_t Native_AudioMixer_SetClientCanHearSelf(IPluginContext *pContext, const cell_t *params)
+    {
+        int client = params[1];
+        bool canhear = params[2] ? true : false;
+
+        rust!(Native_AudioMixer_SetClientCanHearSelf__Rust [client : c_int as "int", canhear : bool as "bool"] {
+            let ext = unsafe { EXT.as_ref().unwrap() };
+            if let Some(mixer) = ext.mixers.get(client as usize-1) {
+                mixer.0.set_hearself(canhear)
+            }
+        });
+        return 0;
+    }
 
     static cell_t Native_CreateAudioPlayer(IPluginContext *pContext, const cell_t *params)
     {
@@ -661,6 +720,8 @@ cpp! {{
     }
 
     sp_nativeinfo_t g_Natives[] = {
+        { "AudioMixer_GetClientCanHearSelf", Native_AudioMixer_GetClientCanHearSelf },
+        { "AudioMixer_SetClientCanHearSelf", Native_AudioMixer_SetClientCanHearSelf },
         { "AudioPlayer.AudioPlayer", Native_CreateAudioPlayer },
         { "AudioPlayer.PlayedSecs.get", Native_AudioPlayer_GetPlayedSecs },
         { "AudioPlayer.IsFinished.get", Native_AudioPlayer_GetFinished },

@@ -2,6 +2,13 @@
 {
 	"csgo"
 	{
+		"Offsets"
+		{
+			"CGameClient::IsHearingClient"
+			{
+				"windows"	"38"
+			}
+		}
 		"Signatures"
 		{
 			"SV_BroadcastVoiceData"

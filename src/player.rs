@@ -170,8 +170,8 @@ impl<T: io::Read + Send + 'static> AsyncRead for BufferBlockingRead<T> {
         }
 
         // Timer
-        for i in 0..size {
-            buf[i] = self.buf.pop_front().unwrap();
+        for b in buf.iter_mut().take(size) {
+            *b = self.buf.pop_front().unwrap();
         }
         Poll::Ready(Ok(size))
     }
@@ -289,6 +289,7 @@ struct MixerInner {
     shutdown_tx: Option<oneshot::Sender<()>>,
 
     slot: c_int,
+    hearself: bool,
 
     encode: VoiceCodec,
 }
@@ -304,6 +305,7 @@ impl Mixer {
             shutdown_tx: None,
             slot,
             encode,
+            hearself: false,
         })))
     }
 
@@ -324,6 +326,16 @@ impl Mixer {
     pub(crate) fn shutdown(&self) {
         let mut self_ = self.0.lock().unwrap();
         self_.shutdown_tx.take().unwrap().send(()).unwrap();
+    }
+
+    pub(crate) fn hearself(&self) -> bool {
+        let self_ = self.0.lock().unwrap();
+        self_.hearself
+    }
+
+    pub(crate) fn set_hearself(&self, hearself: bool) {
+        let mut self_ = self.0.lock().unwrap();
+        self_.hearself = hearself;
     }
 
     pub(crate) async fn run(&self) {
@@ -439,7 +451,7 @@ impl Mixer {
                         false,
                     );
                     if size != 0 {
-                        crate::send_voicedata_as_slot(self_.slot, &comp[..size]);
+                        crate::send_voicedata_as_slot(self_.slot, &comp[..size], self_.hearself);
                     }
                 }
             }
