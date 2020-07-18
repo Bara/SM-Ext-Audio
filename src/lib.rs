@@ -301,7 +301,7 @@ impl AudioPlayerHandle {
                 yt.stdout(Stdio::piped());
                 yt.stderr(Stdio::null());
 
-                yt.args(&["--socket-timeout", "5", "-J", &url]);
+                yt.args(&["--socket-timeout", "5", "-f", "bestaudio/worst", "-J", &url]);
 
                 if let Ok(child) = yt.spawn() {
                     let mut json = Vec::new();
