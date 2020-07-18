@@ -3,7 +3,7 @@
 #[macro_use]
 extern crate cpp;
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 use std::thread;
 
 use std::ffi::{CStr, CString};
@@ -55,8 +55,13 @@ fn get_sm_path<'a>() -> &'a CStr {
     }
 }
 
+fn queue_game_frame(func: impl FnOnce() + 'static) {
+    let ext = unsafe { EXT.as_ref().unwrap() };
+    let mut queue_funcs = ext.queue_funcs.lock().unwrap();
+    queue_funcs.push(Box::new(func));
+}
+
 fn send_voicedata_as_slot(slot: c_int, data: &[u8], hearself: bool) {
-    let _guard = Extension::send_guard();
     let size = data.len();
     let data = data.as_ptr();
     cpp!(unsafe [slot as "int", data as "const char *", size as "size_t", hearself as "bool"] {
@@ -126,7 +131,7 @@ pub(crate) struct Extension {
     spawned_tasks: Mutex<Vec<JoinHandle<()>>>,
     drop_tx: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
-    send_lock: Mutex<()>,
+    queue_funcs: Mutex<Vec<Box<dyn FnOnce()>>>,
 }
 
 impl Extension {
@@ -144,7 +149,7 @@ impl Extension {
                 spawned_tasks: Mutex::new(Vec::new()),
                 drop_tx: None,
                 thread: None,
-                send_lock: Mutex::new(()),
+                queue_funcs: Mutex::new(Vec::new()),
             });
         }
     }
@@ -188,11 +193,6 @@ impl Extension {
         let ext = unsafe { EXT.as_mut().unwrap() };
         ext.drop_tx.replace(drop_tx);
         ext.thread.replace(thread);
-    }
-
-    fn send_guard() -> MutexGuard<'static, ()> {
-        let ext = unsafe { EXT.as_ref().unwrap() };
-        ext.send_lock.lock().unwrap()
     }
 
     pub(crate) fn shutdown() {
@@ -398,6 +398,16 @@ cpp! {{
 
     extern sp_nativeinfo_t g_Natives[];
 
+    static void OnGameFrame(bool simulating) {
+        rust!(OnGameFrame__Rust [] {
+            let ext = unsafe { EXT.as_ref().unwrap() };
+            let mut queue_funcs = ext.queue_funcs.lock().unwrap();
+            while let Some(func) = queue_funcs.pop() {
+                func();
+            }
+        });
+    }
+
     class Ext : public SDKExtension
     {
     public:
@@ -476,10 +486,14 @@ cpp! {{
             g_AudioPlayerType = handlesys->CreateType("AudioPlayer", &g_AudioPlayerTypeHandler, 0, NULL, NULL, myself->GetIdentity(), NULL);
             sharesys->AddNatives(myself, g_Natives);
 
+            smutils->AddGameFrameHook(OnGameFrame);
+
             return true;
         }
 
         virtual void SDK_OnUnload() {
+            smutils->RemoveGameFrameHook(OnGameFrame);
+
             if (g_pDetourSVBroadcastVoiceData) {
                 g_pDetourSVBroadcastVoiceData->Destroy();
                 g_pDetourSVBroadcastVoiceData = nullptr;
@@ -658,6 +672,33 @@ cpp! {{
         return 0;
     }
 
+    static cell_t Native_AudioPlayer_AddInputArg(IPluginContext *pContext, const cell_t *params)
+    {
+        Handle_t hndl = static_cast<Handle_t>(params[1]);
+        HandleError err;
+        HandleSecurity sec = HandleSecurity(NULL, myself->GetIdentity());
+
+        void *player;
+        if ((err = handlesys->ReadHandle(hndl, g_AudioPlayerType, &sec, &player)) != HandleError_None) {
+            return pContext->ThrowNativeError("Invalid AudioPlayer handle %x (error %d)", hndl, err);
+        }
+
+        char *arg;
+        pContext->LocalToString(params[2], &arg);
+
+        rust!(Native_AudioPlayer_AddInputArg__Rust [player : *mut AudioPlayerHandle as "void*", arg: *const i8 as "char*"] {
+            let arg = CStr::from_ptr(arg).to_str().unwrap();
+            let mut player = Box::from_raw(player);
+
+            if let Some(ffmpeg) = player.ffmpeg.as_mut() {
+                ffmpeg.in_arg(arg);
+            }
+            std::mem::forget(player);
+        });
+
+        return 0;
+    }
+
     static cell_t Native_AudioPlayer_AddArg(IPluginContext *pContext, const cell_t *params)
     {
         Handle_t hndl = static_cast<Handle_t>(params[1]);
@@ -727,6 +768,7 @@ cpp! {{
         { "AudioPlayer.IsFinished.get", Native_AudioPlayer_GetFinished },
         { "AudioPlayer.ClientIndex.get", Native_AudioPlayer_GetClientIndex },
         { "AudioPlayer.SetFrom", Native_AudioPlayer_SetFrom },
+        { "AudioPlayer.AddInputArg", Native_AudioPlayer_AddInputArg },
         { "AudioPlayer.AddArg", Native_AudioPlayer_AddArg },
         { "AudioPlayer.PlayAsClient", Native_AudioPlayer_PlayAsClient },
         { nullptr, nullptr },

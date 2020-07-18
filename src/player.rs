@@ -187,6 +187,7 @@ impl<T: io::Read + Send + 'static> Drop for BufferBlockingRead<T> {
 
 pub(crate) struct FFmpeg {
     cmd: Command,
+    in_args: Vec<String>,
     args: Vec<String>,
     ss: f64,
 }
@@ -205,9 +206,15 @@ impl FFmpeg {
 
         FFmpeg {
             cmd,
+            in_args: Vec::new(),
             args: Vec::new(),
             ss: 0.0,
         }
+    }
+
+    pub(crate) fn in_arg<S: AsRef<str>>(&mut self, arg: S) -> &Self {
+        self.in_args.push(arg.as_ref().to_owned());
+        self
     }
 
     pub(crate) fn arg<S: AsRef<str>>(&mut self, arg: S) -> &Self {
@@ -223,9 +230,13 @@ impl FFmpeg {
     pub(crate) fn start<S: AsRef<str>>(mut self, uri: S) -> io::Result<Child> {
         let ss = self.ss.to_string();
         let samplerate = crate::SAMPLERATE.to_string();
+
+        self.cmd.args(&self.in_args);
+        let args = vec!["-i", uri.as_ref()];
+        self.cmd.args(args);
+
+        self.cmd.args(&self.args);
         let args = vec![
-            "-i",
-            uri.as_ref(),
             "-ss",
             &ss,
             "-acodec",
@@ -238,8 +249,6 @@ impl FFmpeg {
             "s16le",
             "-",
         ];
-
-        self.cmd.args(&self.args);
         self.cmd.args(args);
 
         self.cmd.spawn()
@@ -451,7 +460,12 @@ impl Mixer {
                         false,
                     );
                     if size != 0 {
-                        crate::send_voicedata_as_slot(self_.slot, &comp[..size], self_.hearself);
+                        let slot = self_.slot;
+                        let hearself = self_.hearself;
+                        let comp = (&comp[..size]).to_vec();
+                        crate::queue_game_frame(move || {
+                            crate::send_voicedata_as_slot(slot, &comp, hearself);
+                        })
                     }
                 }
             }
