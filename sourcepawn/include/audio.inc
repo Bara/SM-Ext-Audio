@@ -29,7 +29,7 @@ methodmap AudioPlayer < Handle
 
     public native void AddArg(const char[] arg);
 
-    public native bool PlayAsClient(int client, const char[] uri);
+    public native void PlayAsClient(int client, const char[] uri);
 }
 
 

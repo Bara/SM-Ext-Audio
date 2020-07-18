@@ -303,10 +303,9 @@ fn main() {
     #[cfg(feature = "metamod")]
     {
         let mm_root_string = var("MMSOURCE110")
-            .or(var("MMSOURCE"))
-            .or(var("MMSOURCE_DEV"))
-            .unwrap()
-            .to_string();
+            .or_else(|_| var("MMSOURCE"))
+            .or_else(|_| var("MMSOURCE_DEV"))
+            .unwrap();
         let mm_root = Path::new(&mm_root_string);
         metamod::configure_for_hl2(mm_root, &mut config);
     }

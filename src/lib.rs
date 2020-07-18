@@ -3,11 +3,13 @@
 #[macro_use]
 extern crate cpp;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_int, c_uchar};
+
+use std::path::PathBuf;
 
 use async_std::task::JoinHandle;
 use futures::channel::oneshot;
@@ -25,6 +27,11 @@ const CODEC_EXTENSION: &str = "_client.so";
 const FFMPEG_FILENAME: &str = "ffmpeg.exe";
 #[cfg(target_os = "linux")]
 const FFMPEG_FILENAME: &str = "ffmpeg";
+
+#[cfg(target_os = "windows")]
+const YOUTUBE_DL_FILENAME: &str = "youtube-dl.exe";
+#[cfg(target_os = "linux")]
+const YOUTUBE_DL_FILENAME: &str = "youtube-dl";
 
 const SAMPLERATE: usize = 22050;
 const FRAMESIZE: usize = 512;
@@ -122,9 +129,11 @@ cpp! {{
 
 mod codec;
 mod player;
+mod reader;
 
 use codec::VoiceCodec;
-use player::{BufferBlockingRead, FFmpeg, Mixer, Player};
+use player::{FFmpeg, Mixer, Player};
+use reader::BufferBlockingRead;
 
 pub(crate) struct Extension {
     mixers: Vec<(Mixer, Mutex<VoiceCodec>)>,
@@ -232,7 +241,8 @@ impl Extension {
 
 pub struct AudioPlayerHandle {
     pub(crate) ffmpeg: Option<FFmpeg>,
-    pub(crate) player: Option<Player>,
+    pub(crate) player: Arc<RwLock<Option<Player>>>,
+    task: Option<JoinHandle<()>>,
     slot: Option<usize>,
 }
 
@@ -240,13 +250,15 @@ impl AudioPlayerHandle {
     fn new() -> AudioPlayerHandle {
         AudioPlayerHandle {
             ffmpeg: Some(FFmpeg::new()),
-            player: None,
+            player: Arc::new(RwLock::new(None)),
+            task: None,
             slot: None,
         }
     }
 
     fn secs(&self) -> f32 {
-        if let Some(player) = self.player.as_ref() {
+        let player = self.player.read().unwrap();
+        if let Some(player) = player.as_ref() {
             (player.read_size() as f32) / (SAMPLERATE as f32) / 2.0
         } else {
             0.0
@@ -254,7 +266,8 @@ impl AudioPlayerHandle {
     }
 
     fn finished(&self) -> bool {
-        if let Some(player) = self.player.as_ref() {
+        let player = self.player.read().unwrap();
+        if let Some(player) = player.as_ref() {
             player.finished()
         } else {
             false
@@ -265,33 +278,104 @@ impl AudioPlayerHandle {
         self.slot
     }
 
-    fn play(&mut self, slot: usize, uri: &str) -> bool {
-        if let Some(ffmpeg) = self.ffmpeg.take() {
-            match ffmpeg.start(uri) {
-                Ok(child) => {
-                    let ext = unsafe { EXT.as_ref().unwrap() };
-                    let entry = ext.mixers.get(slot);
-                    match entry {
-                        Some(entry) => {
-                            self.slot.replace(slot);
-                            async_std::task::block_on(async {
-                                self.player.replace(entry.0.push(Box::pin(
-                                    BufferBlockingRead::new(child.stdout.unwrap()),
-                                )));
-                            });
-                            return true;
-                        }
-                        None => {
-                            Extension::report_error(&format!("Out of slot: {}", slot));
+    fn play(&mut self, slot: usize, uri: &str) {
+        let ffmpeg = self.ffmpeg.take();
+        let mut url = uri.to_owned();
+        let player = self.player.clone();
+
+        self.slot.replace(slot);
+        self.task.replace(async_std::task::spawn(async move {
+            use futures::AsyncReadExt;
+            use std::collections::BTreeMap;
+            use std::process::{Command, Stdio};
+
+            let mut http_headers = BTreeMap::new();
+            if url.starts_with("http://") || url.starts_with("https://") {
+                let mut path = PathBuf::new();
+                path.push(crate::get_sm_path().to_str().unwrap());
+                path.push("data/audio_ext");
+                path.push(crate::YOUTUBE_DL_FILENAME);
+
+                let mut yt = Command::new(&path);
+                yt.stdin(Stdio::null());
+                yt.stdout(Stdio::piped());
+                yt.stderr(Stdio::null());
+
+                yt.args(&["--socket-timeout", "5", "-J", &url]);
+
+                if let Ok(child) = yt.spawn() {
+                    let mut json = Vec::new();
+                    let mut reader = BufferBlockingRead::new(child.stdout.unwrap());
+                    reader.read_to_end(&mut json).await.unwrap();
+                    let value: serde_json::Value = match serde_json::from_slice(&json) {
+                        Ok(value) => value,
+                        Err(_) => return,
+                    };
+
+                    let is_playlist = value["_type"] == serde_json::json!("playlist");
+                    if is_playlist {
+                        return;
+                    }
+                    url = match value["url"].as_str() {
+                        Some(url) => url.to_string(),
+                        None => return,
+                    };
+                    if let Some(val_http_headers) = value["http_headers"].as_object() {
+                        for (field, value) in val_http_headers.iter() {
+                            http_headers
+                                .insert(field.to_string(), value.as_str().map(|s| s.to_string()));
                         }
                     }
                 }
-                Err(err) => {
-                    Extension::report_error(&format!("Play error: {}", err));
+            }
+
+            if let Some(mut ffmpeg) = ffmpeg {
+                let mut headers = String::new();
+                for (field, val) in http_headers.iter() {
+                    if let Some(val) = val {
+                        headers.push_str(&format!("{}: {}\r\n", field, val));
+                    } else {
+                        headers.push_str(&format!("{}: \r\n", field));
+                    }
+                }
+
+                if !headers.is_empty() {
+                    ffmpeg.in_arg("-headers");
+                    ffmpeg.in_arg(&headers);
+                }
+
+                match ffmpeg.start(url) {
+                    Ok(child) => {
+                        let ext = unsafe { EXT.as_ref().unwrap() };
+                        let entry = ext.mixers.get(slot);
+                        match entry {
+                            Some(entry) => {
+                                let mut player = player.write().unwrap();
+                                player.replace(entry.0.push(Box::pin(BufferBlockingRead::new(
+                                    child.stdout.unwrap(),
+                                ))));
+                            }
+                            None => {
+                                Extension::report_error(&format!("Out of slot: {}", slot));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        Extension::report_error(&format!("Play error: {}", err));
+                    }
                 }
             }
-        }
-        false
+        }));
+    }
+}
+
+impl Drop for AudioPlayerHandle {
+    fn drop(&mut self) {
+        async_std::task::block_on(async {
+            if let Some(task) = self.task.take() {
+                task.await;
+            }
+        })
     }
 }
 
@@ -742,22 +826,21 @@ cpp! {{
         char *uri;
         pContext->LocalToString(params[3], &uri);
 
-        bool success = rust!(Native_AudioPlayer_PlayAsClient__Rust [player : *mut AudioPlayerHandle as "void*", uri : *const i8 as "char*", slot : c_int as "int"] -> bool as "bool" {
+        rust!(Native_AudioPlayer_PlayAsClient__Rust [player : *mut AudioPlayerHandle as "void*", uri : *const i8 as "char*", slot : c_int as "int"] {
             let ext = unsafe { EXT.as_ref().unwrap() };
             if slot < 0 || slot >= ext.mixers.len() as i32 {
                 Extension::report_error(&format!("Slot out of range: {}", slot));
-                return false;
+                return;
             }
 
             let slot = slot as usize;
             let uri = CStr::from_ptr(uri).to_str().unwrap();
             let mut player = Box::from_raw(player);
 
-            let success = player.play(slot, uri);
+            player.play(slot, uri);
             std::mem::forget(player);
-            success
         });
-        return success ? 1 : 0;
+        return 0;
     }
 
     sp_nativeinfo_t g_Natives[] = {
