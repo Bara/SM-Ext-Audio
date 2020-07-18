@@ -569,6 +569,7 @@ cpp! {{
 
             g_AudioPlayerType = handlesys->CreateType("AudioPlayer", &g_AudioPlayerTypeHandler, 0, NULL, NULL, myself->GetIdentity(), NULL);
             sharesys->AddNatives(myself, g_Natives);
+            sharesys->RegisterLibrary(myself, "Audio");
 
             smutils->AddGameFrameHook(OnGameFrame);
 
