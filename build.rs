@@ -288,17 +288,7 @@ fn main() {
 
     c.compile("asm");
 
-    let out_dir = var("OUT_DIR").unwrap();
-    let out_dir = Path::new(&out_dir);
-
-    #[cfg(target_os = "windows")]
-    {
-        config.object(out_dir.join("asm.lib"));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        config.object(out_dir.join("asm.a"));
-    }
+    println!("cargo:rustc-link-lib=static=asm");
 
     #[cfg(feature = "metamod")]
     {
