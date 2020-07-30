@@ -22,13 +22,11 @@ jobs:
             cargo build --target i686-pc-windows-msvc --release
         displayName: Build
       - 
-        task: ArchiveFiles@2
+        task: PublishBuildArtifacts@1
         inputs:
-          rootFolderOrFile: 'target/i686-pc-windows-msvc/release'
-          includeRootFolder: false
-          archiveType: 'zip'
-          archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId)-Windows.zip'
-          replaceExistingArchive: true
+          pathToPublish: "target/i686-pc-windows-msvc/release"
+          artifactName: "SM-Ext-Audio_windows"
+          publishLocation: "Container"
   - 
     job: Linux
     pool: 
@@ -52,10 +50,8 @@ jobs:
             cargo build --target i686-unknown-linux-gnu --release
         displayName: Build
       - 
-        task: ArchiveFiles@2
+        task: PublishBuildArtifacts@1
         inputs:
-          rootFolderOrFile: 'target/i686-unknown-linux-gnu/release'
-          includeRootFolder: false
-          archiveType: 'zip'
-          archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId)-Linux.zip'
-          replaceExistingArchive: true
+          pathToPublish: "target/i686-unknown-linux-gnu/release"
+          artifactName: "SM-Ext-Audio_linux"
+          publishLocation: "Container"
