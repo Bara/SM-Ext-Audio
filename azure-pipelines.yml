@@ -21,6 +21,14 @@ jobs:
             rustup target add i686-pc-windows-msvc
             cargo build --target i686-pc-windows-msvc --release
         displayName: Build
+      - 
+        task: ArchiveFiles@2
+        inputs:
+          rootFolderOrFile: 'target/i686-pc-windows-msvc/release'
+          includeRootFolder: false
+          archiveType: 'zip'
+          archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId)-Windows.zip'
+          replaceExistingArchive: true
   - 
     job: Linux
     pool: 
@@ -43,3 +51,11 @@ jobs:
             rustup target add i686-unknown-linux-gnu
             cargo build --target i686-unknown-linux-gnu --release
         displayName: Build
+      - 
+        task: ArchiveFiles@2
+        inputs:
+          rootFolderOrFile: 'target/i686-unknown-linux-gnu/release'
+          includeRootFolder: false
+          archiveType: 'zip'
+          archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId)-Linux.zip'
+          replaceExistingArchive: true
