@@ -99,7 +99,7 @@ mod metamod {
             }
             #[cfg(target_env = "gnu")]
             {
-                config.object(sdkpath.join("lib/linux32/release/libprotobuf.a"));
+                config.object(sdk_path.join("lib/linux32/release/libprotobuf.a"));
             }
 
             config.include(sdk_path.join("common/protobuf-2.5.0/src"));
