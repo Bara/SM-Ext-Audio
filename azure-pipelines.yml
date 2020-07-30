@@ -1,47 +1,45 @@
-strategy:
-  matrix:
-    windows-stable:
-      imageName: 'vs2017-win2016'
-      rustup_toolchain: stable
-    linux-stable:
-      imageName: 'ubuntu-16.04'
-      rustup_toolchain: stable
-
-pool:
-  vmImage: $(imageName)
-
-steps:
-  - checkout: self
-    submodules: recursive
-
-  # Install Rust
-  - script: |
-      sudo apt-get install gcc-multilib g++-multilib
-      curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain $RUSTUP_TOOLCHAIN
-      echo "##vso[task.setvariable variable=PATH;]$PATH:$HOME/.cargo/bin"
-    displayName: Install rust
-    condition: ne( variables['Agent.OS'], 'Windows_NT' )
-  - script: |
-      curl -sSf -o rustup-init.exe https://win.rustup.rs
-      rustup-init.exe -y --default-toolchain %RUSTUP_TOOLCHAIN%
-      echo "##vso[task.setvariable variable=PATH;]%PATH%;%USERPROFILE%\.cargo\bin"
-    displayName: Windows install rust
-    condition: eq( variables['Agent.OS'], 'Windows_NT' )
-
-  # Set env vars
-  - script: |
-      echo "##vso[task.setvariable variable=SOURCEMOD;]deps/sourcemod"
-      echo "##vso[task.setvariable variable=MMSOURCE;]deps/mmsource"
-      echo "##vso[task.setvariable variable=HL2SDKCSGO;]deps/hl2sdk-csgo"
-
-  # Build
-  - script: |
-      rustup target add i686-unknown-linux-gnu
-      cargo build --target i686-unknown-linux-gnu --release
-    displayName: Linux Cargo build
-    condition: ne( variables['Agent.OS'], 'Windows_NT' )
-  - script: |
-      rustup target add i686-pc-windows-msvc
-      cargo build --target i686-pc-windows-msvc --release
-    displayName: Windows Cargo build
-    condition: eq( variables['Agent.OS'], 'Windows_NT' )
+jobs: 
+  - 
+    job: Linux
+    pool: 
+      vmImage: vs2017-win2016
+    steps: 
+      - 
+        checkout: self
+        submodules: recursive
+      - 
+        displayName: "Install Dependencies"
+        script: |
+            curl -sSf -o rustup-init.exe https://win.rustup.rs
+            rustup-init.exe -y --default-toolchain stable
+            echo "##vso[task.setvariable variable=PATH;]%PATH%;%USERPROFILE%/.cargo/bin"
+      - 
+        displayName: Build
+        script: |
+            set SOURCEMOD=deps/sourcemod
+            set MMSOURCE=deps/mmsource
+            set HL2SDKCSGO=deps/hl2sdk-csgo
+            rustup target add i686-pc-windows-msvc
+            cargo build --target i686-pc-windows-msvc --release
+  - 
+    job: Windows
+    pool: 
+      vmImage: ubuntu-16.04
+    steps: 
+      - 
+        checkout: self
+        submodules: recursive
+      - 
+        displayName: "Install Dependencies"
+        script: |
+            sudo apt-get install gcc-multilib g++-multilib
+            curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+            echo "##vso[task.setvariable variable=PATH;]$PATH:$HOME/.cargo/bin"
+      - 
+        displayName: Build
+        script: |
+            export SOURCEMOD="deps/sourcemod"
+            export MMSOURCE="deps/mmsource"
+            export HL2SDKCSGO="deps/hl2sdk-csgo"
+            rustup target add i686-unknown-linux-gnu
+            cargo build --target i686-unknown-linux-gnu --release
