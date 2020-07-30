@@ -174,6 +174,8 @@ fn main() {
         config.flag("-fno-threadsafe-statics");
         config.flag("-Wno-non-virtual-dtor");
         config.flag("-Wno-overloaded-virtual");
+        config.flag("-Wno-ignored-qualifiers");
+        config.flag("-Wno-extra");
         config.flag("-fvisibility-inlines-hidden");
 
         //config.flag_if_supported("-Wno-inconsistent-missing-override");
