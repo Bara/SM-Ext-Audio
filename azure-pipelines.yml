@@ -7,9 +7,11 @@ jobs:
       - Agent.OS -equals Windows_NT
     steps: 
       - 
-        checkout: self
-        submodules: recursive
-        displayName: Git Clone Recursively
+        script: |
+          git clone https://github.com/alliedmodders/sourcemod -b 1.10-dev deps/sourcemod
+          git clone https://github.com/alliedmodders/metamod-source -b 1.10-dev deps/mmsource
+          git clone https://github.com/alliedmodders/hl2sdk -b csgo deps/hl2sdk-csgo
+        displayName: Git Clone Dependencies
       - 
         script: |
             set SOURCEMOD=deps/sourcemod
@@ -33,9 +35,11 @@ jobs:
       - Agent.OS -equals Linux
     steps: 
       - 
-        checkout: self
-        submodules: recursive
-        displayName: Git Clone Recursively
+        script: |
+          git clone https://github.com/alliedmodders/sourcemod -b 1.10-dev deps/sourcemod
+          git clone https://github.com/alliedmodders/metamod-source -b 1.10-dev deps/mmsource
+          git clone https://github.com/alliedmodders/hl2sdk -b csgo deps/hl2sdk-csgo
+        displayName: Git Clone Dependencies
       - 
         script: |
             export SOURCEMOD="deps/sourcemod"
