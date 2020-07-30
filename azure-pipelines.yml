@@ -11,6 +11,9 @@ pool:
   vmImage: $(imageName)
 
 steps:
+  - checkout: self
+    submodules: recursive
+
   # Install Rust
   - script: |
       curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain $RUSTUP_TOOLCHAIN
@@ -31,9 +34,13 @@ steps:
       echo "##vso[task.setvariable variable=HL2SDKCSGO;]deps/hl2sdk-csgo"
 
   # Build
-  - script: cargo build --target i686-unknown-linux-gnu --release
+  - script: |
+      rustup target add i686-unknown-linux-gnu
+      cargo build --target i686-unknown-linux-gnu --release
     displayName: Linux Cargo build
     condition: ne( variables['Agent.OS'], 'Windows_NT' )
-  - script: cargo build --target i686-pc-windows-msvc --release
+  - script: |
+      rustup target add i686-pc-windows-msvc
+      cargo build --target i686-pc-windows-msvc --release
     displayName: Windows Cargo build
     condition: eq( variables['Agent.OS'], 'Windows_NT' )
