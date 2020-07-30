@@ -97,6 +97,10 @@ mod metamod {
                     config.object(sdk_path.join("lib/win32/release/vs2017/libprotobuf.lib"));
                 }
             }
+            #[cfg(target_env = "gnu")]
+            {
+                config.object(sdkpath.join("lib/linux32/release/libprotobuf.a"));
+            }
 
             config.include(sdk_path.join("common/protobuf-2.5.0/src"));
         }
@@ -121,8 +125,8 @@ mod metamod {
         {
             config.define("COMPILER_GCC", None);
 
-            config.object("libtier0.so");
-            config.object("libvstdlib.so");
+            config.object(sdk_path.join("lib/linux/libtier0.so"));
+            config.object(sdk_path.join("lib/linux/libvstdlib.so"));
         }
 
         config.file(sdk_path.join("public/engine/protobuf/netmessages.pb.cc"));
