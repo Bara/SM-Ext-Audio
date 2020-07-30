@@ -1,6 +1,6 @@
 jobs: 
   - 
-    job: Linux
+    job: Windows
     pool: 
       vmImage: vs2017-win2016
     steps: 
@@ -22,7 +22,7 @@ jobs:
             cargo build --target i686-pc-windows-msvc --release
         displayName: Build
   - 
-    job: Windows
+    job: Linux
     pool: 
       vmImage: ubuntu-16.04
     steps: 
