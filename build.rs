@@ -265,16 +265,6 @@ fn main() {
     config.file("sm/CDetour/detours.cpp");
 
     let mut c = cc::Build::new();
-    c.define("WIN32", None);
-    c.include("sm");
-    c.file("sm/asm/asm.c");
-    c.file("sm/libudis86/decode.c");
-    c.file("sm/libudis86/itab.c");
-    c.file("sm/libudis86/syn.c");
-    c.file("sm/libudis86/syn-att.c");
-    c.file("sm/libudis86/syn-intel.c");
-    c.file("sm/libudis86/udis86.c");
-
     #[cfg(target_os = "windows")]
     {
         c.define("WIN32", None);
@@ -285,6 +275,15 @@ fn main() {
         c.define("_LINUX", None);
         c.define("POSIX", None);
     }
+
+    c.include("sm");
+    c.file("sm/asm/asm.c");
+    c.file("sm/libudis86/decode.c");
+    c.file("sm/libudis86/itab.c");
+    c.file("sm/libudis86/syn.c");
+    c.file("sm/libudis86/syn-att.c");
+    c.file("sm/libudis86/syn-intel.c");
+    c.file("sm/libudis86/udis86.c");
 
     c.compile("asm");
 
