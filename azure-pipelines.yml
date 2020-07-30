@@ -24,7 +24,7 @@ jobs:
           pathToPublish: "target/i686-pc-windows-msvc/release"
           artifactName: "SM-Ext-Audio_windows"
           publishLocation: "Container"
-          displayName: Publish Artifacts
+        displayName: Publish Artifacts
   - 
     job: Linux
     pool: 
@@ -50,4 +50,4 @@ jobs:
           pathToPublish: "target/i686-unknown-linux-gnu/release"
           artifactName: "SM-Ext-Audio_linux"
           publishLocation: "Container"
-          displayName: Publish Artifacts
+        displayName: Publish Artifacts
