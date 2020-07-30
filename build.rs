@@ -284,7 +284,7 @@ fn main() {
     {
         c.define("_LINUX", None);
         c.define("POSIX", None);
-        c.flag("-Wno-sign-compare")
+        c.flag("-Wno-sign-compare");
     }
 
     c.include("sm");
