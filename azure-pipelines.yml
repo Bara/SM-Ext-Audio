@@ -24,7 +24,7 @@ jobs:
         task: PublishBuildArtifacts@1
         inputs:
           pathToPublish: "target/i686-pc-windows-msvc/release"
-          artifactName: "SM-Ext-Audio_windows"
+          artifactName: "windows"
           publishLocation: "Container"
         displayName: Publish Artifacts
   - 
@@ -52,6 +52,6 @@ jobs:
         task: PublishBuildArtifacts@1
         inputs:
           pathToPublish: "target/i686-unknown-linux-gnu/release"
-          artifactName: "SM-Ext-Audio_linux"
+          artifactName: "linux"
           publishLocation: "Container"
         displayName: Publish Artifacts
